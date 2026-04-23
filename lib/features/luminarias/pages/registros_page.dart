@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/luminaria_model.dart';
 import 'editar_luminaria_page.dart';
+import '../services/excel_luminarias_service.dart';
 
 class RegistrosPage extends StatefulWidget {
   const RegistrosPage({super.key});
@@ -40,6 +41,24 @@ class _RegistrosPageState extends State<RegistrosPage> {
     return '';
   }
 
+  DateTime _parseFechaRegistro(Map<String, dynamic> item) {
+    final campoFecha = obtenerCampoFecha(item);
+    if (campoFecha.isEmpty) {
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+
+    final valor = item[campoFecha];
+    if (valor == null) {
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+
+    try {
+      return DateTime.parse(valor.toString()).toLocal();
+    } catch (_) {
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+  }
+
   String _fechaClave(dynamic fecha) {
     if (fecha == null) return '';
     try {
@@ -53,7 +72,9 @@ class _RegistrosPageState extends State<RegistrosPage> {
   String _fechaVisualChip(String fechaClave) {
     try {
       final date = DateTime.parse(fechaClave);
-      final hoy = DateTime.now();
+
+      final ahora = DateTime.now();
+      final hoy = DateTime(ahora.year, ahora.month, ahora.day);
       final ayer = hoy.subtract(const Duration(days: 1));
 
       final hoyKey = DateFormat('yyyy-MM-dd').format(hoy);
@@ -71,8 +92,10 @@ class _RegistrosPageState extends State<RegistrosPage> {
   String _fechaVisualLarga(String fechaClave) {
     try {
       final date = DateTime.parse(fechaClave);
-      final texto =
-          DateFormat("EEEE, d 'de' MMMM 'de' yyyy", 'es').format(date);
+      final texto = DateFormat(
+        "EEEE, d 'de' MMMM 'de' yyyy",
+        'es',
+      ).format(date);
       if (texto.isEmpty) return fechaClave;
       return texto[0].toUpperCase() + texto.substring(1);
     } catch (_) {
@@ -88,6 +111,35 @@ class _RegistrosPageState extends State<RegistrosPage> {
     } catch (_) {
       return '--:--';
     }
+  }
+
+  List<Map<String, dynamic>> obtenerUltimaLuminariaPorCodigo(
+    List<Map<String, dynamic>> registros,
+  ) {
+    final Map<String, Map<String, dynamic>> unicos = {};
+
+    for (final item in registros) {
+      final codigo = _safeText(item['codigo'], fallback: '').toUpperCase();
+      if (codigo.isEmpty) continue;
+
+      if (!unicos.containsKey(codigo)) {
+        unicos[codigo] = item;
+      } else {
+        final fechaNueva = _parseFechaRegistro(item);
+        final fechaActual = _parseFechaRegistro(unicos[codigo]!);
+
+        if (fechaNueva.isAfter(fechaActual)) {
+          unicos[codigo] = item;
+        }
+      }
+    }
+
+    final lista = unicos.values.toList()
+      ..sort(
+        (a, b) => _parseFechaRegistro(b).compareTo(_parseFechaRegistro(a)),
+      );
+
+    return lista;
   }
 
   Future<void> cargarRegistros() async {
@@ -128,15 +180,9 @@ class _RegistrosPageState extends State<RegistrosPage> {
 
       final fechasOrdenadas = fechas.toList()..sort((a, b) => b.compareTo(a));
 
-      dataLimpia.sort((a, b) {
-        final campoA = obtenerCampoFecha(a);
-        final campoB = obtenerCampoFecha(b);
-
-        final fechaA = campoA.isEmpty ? '' : _fechaClave(a[campoA]);
-        final fechaB = campoB.isEmpty ? '' : _fechaClave(b[campoB]);
-
-        return fechaB.compareTo(fechaA);
-      });
+      dataLimpia.sort(
+        (a, b) => _parseFechaRegistro(b).compareTo(_parseFechaRegistro(a)),
+      );
 
       if (!mounted) return;
       setState(() {
@@ -147,13 +193,51 @@ class _RegistrosPageState extends State<RegistrosPage> {
       });
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al cargar registros: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error al cargar registros: $e')));
     } finally {
       if (mounted) {
         setState(() => loading = false);
       }
+    }
+  }
+
+  Future<void> exportarExcel() async {
+    try {
+      final luminarias = registrosFiltrados
+          .map((item) => LuminariaModel.fromMap(item))
+          .toList();
+
+      if (luminarias.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No hay registros para exportar')),
+        );
+        return;
+      }
+
+      final ruta = await ExcelLuminariasService.exportarLuminariasConDialogo(
+        luminarias,
+      );
+
+      if (!mounted) return;
+
+      if (ruta == null || ruta.isEmpty) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Exportación cancelada')));
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Excel exportado correctamente')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error al exportar Excel: $e')));
     }
   }
 
@@ -181,14 +265,30 @@ class _RegistrosPageState extends State<RegistrosPage> {
         return const Color(0xFF16A34A);
       case 'INOPERATIVO':
         return const Color(0xFFDC2626);
+      case 'MANTENIMIENTO':
+        return const Color(0xFFF59E0B);
       default:
         return const Color(0xFF64748B);
     }
   }
 
+  Color estadoBgColor(String estado) {
+    switch (estado.toUpperCase()) {
+      case 'OPERATIVO':
+        return const Color(0xFFEAF7EE);
+      case 'INOPERATIVO':
+        return const Color(0xFFFDECEC);
+      case 'MANTENIMIENTO':
+        return const Color(0xFFFFF4DE);
+      default:
+        return const Color(0xFFF1F5F9);
+    }
+  }
+
   String obtenerUbicacion(Map<String, dynamic> item) {
-    return _safeText(item['area'] ?? item['zona'] ?? item['frente'])
-        .toUpperCase();
+    return _safeText(
+      item['area_zona'] ?? item['area'] ?? item['zona'] ?? item['frente'],
+    ).toUpperCase();
   }
 
   IconData obtenerIcono(Map<String, dynamic> item) {
@@ -265,10 +365,11 @@ class _RegistrosPageState extends State<RegistrosPage> {
     final isSmall = MediaQuery.of(context).size.width < 380;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF6F4EF),
+      backgroundColor: const Color(0xFFF6F2EC),
       appBar: AppBar(
-        backgroundColor: const Color(0xFFF6F4EF),
+        backgroundColor: const Color(0xFFF6F2EC),
         elevation: 0,
+        scrolledUnderElevation: 0,
         surfaceTintColor: Colors.transparent,
         leading: IconButton(
           onPressed: () => Navigator.pop(context),
@@ -279,45 +380,54 @@ class _RegistrosPageState extends State<RegistrosPage> {
           'Registros',
           style: TextStyle(
             color: const Color(0xFF0F172A),
-            fontWeight: FontWeight.w800,
+            fontWeight: FontWeight.w900,
             fontSize: isSmall ? 20 : 22,
           ),
         ),
         actions: [
           IconButton(
+            onPressed: exportarExcel,
+            icon: const Icon(Icons.download_rounded),
+            color: const Color(0xFF0F172A),
+          ),
+          IconButton(
             onPressed: cargarRegistros,
             icon: const Icon(Icons.refresh_rounded),
             color: const Color(0xFF0F172A),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
         ],
       ),
       body: loading
           ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.only(bottom: 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildDateChips(isSmall),
-                  const SizedBox(height: 14),
-                  _buildSummaryCard(isSmall),
-                  const SizedBox(height: 16),
-                  registrosFiltrados.isEmpty
-                      ? const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 40),
-                          child: Center(
-                            child: Text(
-                              'No hay registros para esa fecha',
-                              style: TextStyle(
-                                color: Color(0xFF64748B),
-                                fontWeight: FontWeight.w600,
+          : RefreshIndicator(
+              onRefresh: cargarRegistros,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.only(bottom: 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildDateChips(isSmall),
+                    const SizedBox(height: 16),
+                    _buildSummaryCard(isSmall),
+                    const SizedBox(height: 18),
+                    registrosFiltrados.isEmpty
+                        ? const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 40),
+                            child: Center(
+                              child: Text(
+                                'No hay registros para esa fecha',
+                                style: TextStyle(
+                                  color: Color(0xFF64748B),
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
                             ),
-                          ),
-                        )
-                      : _buildGroupedList(isSmall),
-                ],
+                          )
+                        : _buildGroupedList(isSmall),
+                  ],
+                ),
               ),
             ),
     );
@@ -325,7 +435,7 @@ class _RegistrosPageState extends State<RegistrosPage> {
 
   Widget _buildDateChips(bool isSmall) {
     return SizedBox(
-      height: isSmall ? 116 : 124,
+      height: isSmall ? 118 : 128,
       child: ListView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -353,21 +463,22 @@ class _RegistrosPageState extends State<RegistrosPage> {
 
     return GestureDetector(
       onTap: mostrarTodos,
-      child: Container(
-        width: isSmall ? 110 : 122,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        width: isSmall ? 112 : 122,
         padding: EdgeInsets.symmetric(
           horizontal: isSmall ? 10 : 12,
           vertical: isSmall ? 12 : 14,
         ),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFF0F2747) : Colors.white,
-          borderRadius: BorderRadius.circular(24),
+          color: selected ? const Color(0xFF102D57) : Colors.white,
+          borderRadius: BorderRadius.circular(26),
           border: Border.all(
-            color: selected ? const Color(0xFF0F2747) : const Color(0xFFE7E5E4),
+            color: selected ? const Color(0xFF102D57) : const Color(0xFFE7E5E4),
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.04),
+              color: Colors.black.withOpacity(0.045),
               blurRadius: 10,
               offset: const Offset(0, 4),
             ),
@@ -379,7 +490,7 @@ class _RegistrosPageState extends State<RegistrosPage> {
             Icon(
               Icons.calendar_month_rounded,
               color: selected ? Colors.white : const Color(0xFF0F172A),
-              size: isSmall ? 22 : 24,
+              size: isSmall ? 24 : 26,
             ),
             const SizedBox(height: 8),
             Text(
@@ -409,8 +520,9 @@ class _RegistrosPageState extends State<RegistrosPage> {
 
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        width: isSmall ? 100 : 108,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        width: isSmall ? 102 : 110,
         padding: EdgeInsets.symmetric(
           horizontal: 8,
           vertical: isSmall ? 10 : 12,
@@ -419,8 +531,9 @@ class _RegistrosPageState extends State<RegistrosPage> {
           color: Colors.white,
           borderRadius: BorderRadius.circular(24),
           border: Border.all(
-            color:
-                isSelected ? const Color(0xFF16A34A) : const Color(0xFFE7E5E4),
+            color: isSelected
+                ? const Color(0xFF16A34A)
+                : const Color(0xFFE7E5E4),
             width: isSelected ? 1.6 : 1,
           ),
           boxShadow: [
@@ -474,31 +587,48 @@ class _RegistrosPageState extends State<RegistrosPage> {
   }
 
   Widget _buildSummaryCard(bool isSmall) {
-    final total = registrosFiltrados.length;
-    final operativos = registrosFiltrados
+    final List<Map<String, dynamic>> baseResumen = fechaSeleccionada == null
+        ? todosRegistros
+        : registrosFiltrados;
+
+    final luminariasUnicas = obtenerUltimaLuminariaPorCodigo(baseResumen);
+
+    final total = luminariasUnicas.length;
+    final operativos = luminariasUnicas
         .where((e) => _safeText(e['estado']).toUpperCase() == 'OPERATIVO')
         .length;
-    final inoperativos = registrosFiltrados
+    final inoperativos = luminariasUnicas
         .where((e) => _safeText(e['estado']).toUpperCase() == 'INOPERATIVO')
+        .length;
+    final mantenimiento = luminariasUnicas
+        .where((e) => _safeText(e['estado']).toUpperCase() == 'MANTENIMIENTO')
         .length;
 
     String ultimoRegistro = '--:--';
-    if (registrosFiltrados.isNotEmpty) {
-      final campoFecha = obtenerCampoFecha(registrosFiltrados.first);
+    if (luminariasUnicas.isNotEmpty) {
+      final campoFecha = obtenerCampoFecha(luminariasUnicas.first);
       if (campoFecha.isNotEmpty) {
-        ultimoRegistro = _horaVisual(registrosFiltrados.first[campoFecha]);
+        ultimoRegistro = _horaVisual(luminariasUnicas.first[campoFecha]);
       }
     }
 
+    final tituloResumen = fechaSeleccionada == null
+        ? 'Luminarias únicas'
+        : 'Luminarias del día';
+
+    final subtituloResumen = fechaSeleccionada == null
+        ? 'sin duplicados'
+        : 'únicas registradas';
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
-      padding: EdgeInsets.all(isSmall ? 14 : 16),
+      padding: EdgeInsets.all(isSmall ? 16 : 18),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(28),
+        borderRadius: BorderRadius.circular(30),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withOpacity(0.045),
             blurRadius: 14,
             offset: const Offset(0, 5),
           ),
@@ -509,26 +639,27 @@ class _RegistrosPageState extends State<RegistrosPage> {
           Row(
             children: [
               Container(
-                width: isSmall ? 54 : 62,
-                height: isSmall ? 54 : 62,
+                width: isSmall ? 58 : 68,
+                height: isSmall ? 58 : 68,
                 decoration: BoxDecoration(
                   color: const Color(0xFFEAF7EE),
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.circular(20),
                 ),
                 child: const Icon(
                   Icons.analytics_outlined,
                   color: Color(0xFF16A34A),
+                  size: 32,
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Registros del día',
+                      tituloResumen,
                       style: TextStyle(
-                        fontSize: isSmall ? 14 : 16,
+                        fontSize: isSmall ? 15 : 17,
                         fontWeight: FontWeight.w800,
                         color: const Color(0xFF0F172A),
                       ),
@@ -536,21 +667,26 @@ class _RegistrosPageState extends State<RegistrosPage> {
                     const SizedBox(height: 6),
                     Wrap(
                       spacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         Text(
                           '$total',
                           style: TextStyle(
-                            fontSize: isSmall ? 22 : 28,
+                            fontSize: isSmall ? 26 : 30,
                             fontWeight: FontWeight.w900,
                             color: const Color(0xFF0F172A),
+                            height: 1,
                           ),
                         ),
-                        Text(
-                          'encontrados',
-                          style: TextStyle(
-                            fontSize: isSmall ? 13 : 14,
-                            color: const Color(0xFF64748B),
-                            fontWeight: FontWeight.w600,
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            subtituloResumen,
+                            style: TextStyle(
+                              fontSize: isSmall ? 13 : 14,
+                              color: const Color(0xFF64748B),
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ],
@@ -560,50 +696,63 @@ class _RegistrosPageState extends State<RegistrosPage> {
               ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 18),
           Row(
             children: [
               Expanded(
                 child: _summaryMini(
                   icon: Icons.check_circle_outline_rounded,
-                  label: 'Operativos',
+                  label: 'Operativas',
                   value: '$operativos',
                   extra: total > 0
                       ? '${((operativos / total) * 100).round()}%'
                       : '0%',
                   color: const Color(0xFF16A34A),
-                  bg: const Color(0xFFEEF7FF),
+                  bg: const Color(0xFFEAF7EE),
                   isSmall: isSmall,
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Expanded(
                 child: _summaryMini(
                   icon: Icons.cancel_outlined,
-                  label: 'Inoperativos',
+                  label: 'Inoperativas',
                   value: '$inoperativos',
                   extra: total > 0
                       ? '${((inoperativos / total) * 100).round()}%'
                       : '0%',
                   color: const Color(0xFFDC2626),
-                  bg: const Color(0xFFFFEEEE),
+                  bg: const Color(0xFFFDECEC),
                   isSmall: isSmall,
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Expanded(
                 child: _summaryMini(
-                  icon: Icons.schedule_rounded,
-                  label: 'Último',
-                  value: ultimoRegistro,
-                  extra: 'Hoy',
-                  color: const Color(0xFF7C3AED),
-                  bg: const Color(0xFFF2EBFF),
+                  icon: Icons.build_circle_outlined,
+                  label: 'En mant.',
+                  value: '$mantenimiento',
+                  extra: total > 0
+                      ? '${((mantenimiento / total) * 100).round()}%'
+                      : '0%',
+                  color: const Color(0xFFF59E0B),
+                  bg: const Color(0xFFFFF4DE),
                   isSmall: isSmall,
-                  smallText: true,
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              'Última actualización: $ultimoRegistro',
+              style: TextStyle(
+                fontSize: isSmall ? 12 : 13,
+                color: const Color(0xFF64748B),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
         ],
       ),
@@ -620,52 +769,55 @@ class _RegistrosPageState extends State<RegistrosPage> {
     required bool isSmall,
     bool smallText = false,
   }) {
-    return Column(
-      children: [
-        Container(
-          width: isSmall ? 46 : 52,
-          height: isSmall ? 46 : 52,
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(16),
+    return Container(
+      padding: EdgeInsets.symmetric(vertical: isSmall ? 6 : 8),
+      child: Column(
+        children: [
+          Container(
+            width: isSmall ? 50 : 56,
+            height: isSmall ? 50 : 56,
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Icon(icon, color: color, size: isSmall ? 24 : 28),
           ),
-          child: Icon(icon, color: color, size: isSmall ? 22 : 26),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          label,
-          textAlign: TextAlign.center,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: isSmall ? 12 : 13,
-            fontWeight: FontWeight.w700,
-            color: const Color(0xFF334155),
+          const SizedBox(height: 10),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: isSmall ? 12 : 13,
+              fontWeight: FontWeight.w700,
+              color: const Color(0xFF334155),
+            ),
           ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          textAlign: TextAlign.center,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: smallText ? (isSmall ? 14 : 16) : (isSmall ? 22 : 24),
-            fontWeight: FontWeight.w900,
-            color: color,
+          const SizedBox(height: 4),
+          Text(
+            value,
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: smallText ? (isSmall ? 14 : 17) : (isSmall ? 22 : 25),
+              fontWeight: FontWeight.w900,
+              color: color,
+            ),
           ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          extra,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: isSmall ? 11 : 12,
-            fontWeight: FontWeight.w600,
-            color: const Color(0xFF64748B),
+          const SizedBox(height: 2),
+          Text(
+            extra,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: isSmall ? 11 : 12,
+              fontWeight: FontWeight.w700,
+              color: const Color(0xFF64748B),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -680,7 +832,7 @@ class _RegistrosPageState extends State<RegistrosPage> {
             'No hay fechas válidas para mostrar',
             style: TextStyle(
               color: Color(0xFF64748B),
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ),
@@ -712,8 +864,8 @@ class _RegistrosPageState extends State<RegistrosPage> {
     return Row(
       children: [
         Container(
-          width: isSmall ? 36 : 40,
-          height: isSmall ? 36 : 40,
+          width: isSmall ? 38 : 42,
+          height: isSmall ? 38 : 42,
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(14),
@@ -769,6 +921,7 @@ class _RegistrosPageState extends State<RegistrosPage> {
 
     final ubicacion = obtenerUbicacion(item);
     final color = estadoColor(estado.toUpperCase());
+    final colorBg = estadoBgColor(estado.toUpperCase());
     final icon = obtenerIcono(item);
     final horometro = item['horometro'];
 
@@ -782,7 +935,7 @@ class _RegistrosPageState extends State<RegistrosPage> {
         padding: EdgeInsets.all(isSmall ? 12 : 14),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(26),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withOpacity(0.035),
@@ -796,7 +949,7 @@ class _RegistrosPageState extends State<RegistrosPage> {
           children: [
             Container(
               width: 4,
-              height: isSmall ? 90 : 96,
+              height: isSmall ? 96 : 102,
               decoration: BoxDecoration(
                 color: color,
                 borderRadius: BorderRadius.circular(999),
@@ -804,10 +957,10 @@ class _RegistrosPageState extends State<RegistrosPage> {
             ),
             const SizedBox(width: 12),
             Container(
-              width: isSmall ? 58 : 68,
-              height: isSmall ? 58 : 68,
+              width: isSmall ? 60 : 72,
+              height: isSmall ? 60 : 72,
               decoration: BoxDecoration(
-                color: const Color(0xFFF0F7F1),
+                color: colorBg.withOpacity(0.45),
                 borderRadius: BorderRadius.circular(999),
               ),
               child: Icon(
@@ -846,7 +999,12 @@ class _RegistrosPageState extends State<RegistrosPage> {
                     spacing: 8,
                     runSpacing: 8,
                     children: [
-                      _estadoBadge(estado.toUpperCase(), color, isSmall),
+                      _estadoBadge(
+                        estado.toUpperCase(),
+                        color,
+                        colorBg,
+                        isSmall,
+                      ),
                       _horaChip(hora, isSmall),
                     ],
                   ),
@@ -854,10 +1012,18 @@ class _RegistrosPageState extends State<RegistrosPage> {
               ),
             ),
             const SizedBox(width: 8),
-            Icon(
-              Icons.edit_rounded,
-              color: const Color(0xFF64748B),
-              size: isSmall ? 20 : 22,
+            Container(
+              width: isSmall ? 34 : 38,
+              height: isSmall ? 34 : 38,
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.edit_rounded,
+                color: const Color(0xFF64748B),
+                size: isSmall ? 18 : 20,
+              ),
             ),
           ],
         ),
@@ -865,14 +1031,14 @@ class _RegistrosPageState extends State<RegistrosPage> {
     );
   }
 
-  Widget _estadoBadge(String estado, Color color, bool isSmall) {
+  Widget _estadoBadge(String estado, Color color, Color bg, bool isSmall) {
     return Container(
       padding: EdgeInsets.symmetric(
         horizontal: isSmall ? 12 : 14,
         vertical: isSmall ? 7 : 8,
       ),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: bg,
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
@@ -910,7 +1076,7 @@ class _RegistrosPageState extends State<RegistrosPage> {
             style: TextStyle(
               fontSize: isSmall ? 12 : 13,
               color: const Color(0xFF64748B),
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w800,
             ),
           ),
         ],
@@ -921,11 +1087,7 @@ class _RegistrosPageState extends State<RegistrosPage> {
   Widget _infoRow(IconData icon, String text, bool isSmall) {
     return Row(
       children: [
-        Icon(
-          icon,
-          size: isSmall ? 17 : 18,
-          color: const Color(0xFF64748B),
-        ),
+        Icon(icon, size: isSmall ? 17 : 18, color: const Color(0xFF64748B)),
         const SizedBox(width: 6),
         Expanded(
           child: Text(
