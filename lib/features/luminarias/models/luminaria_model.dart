@@ -20,11 +20,15 @@ class LuminariaModel {
   });
 
   factory LuminariaModel.fromMap(Map<String, dynamic> map) {
+    final valorHorometro = map['horometro'];
+
     return LuminariaModel(
       id: map['id']?.toString(),
       codigo: (map['codigo'] ?? '').toString(),
       areaZona: (map['area_zona'] ?? '').toString(),
-      horometro: (map['horometro'] ?? 0).toDouble(),
+      horometro: valorHorometro is num
+          ? valorHorometro.toDouble()
+          : double.tryParse(valorHorometro.toString()) ?? 0,
       estado: (map['estado'] ?? '').toString(),
       fechaRegistro: DateTime.parse(map['fecha_registro'].toString()),
       observacion: (map['observacion'] ?? '').toString(),
@@ -36,13 +40,15 @@ class LuminariaModel {
 
   Map<String, dynamic> toMap() {
     return {
-      'codigo': codigo,
-      'area_zona': areaZona,
+      'codigo': codigo.trim().toUpperCase(),
+      'area_zona': areaZona.trim().toUpperCase(),
       'horometro': horometro,
-      'estado': estado,
+      'estado': estado.trim().toUpperCase(),
       'fecha_registro':
-          '${fechaRegistro.year.toString().padLeft(4, '0')}-${fechaRegistro.month.toString().padLeft(2, '0')}-${fechaRegistro.day.toString().padLeft(2, '0')}',
-      'observacion': observacion,
+          '${fechaRegistro.year.toString().padLeft(4, '0')}-'
+          '${fechaRegistro.month.toString().padLeft(2, '0')}-'
+          '${fechaRegistro.day.toString().padLeft(2, '0')}',
+      'observacion': observacion.trim().toUpperCase(),
     };
   }
 }

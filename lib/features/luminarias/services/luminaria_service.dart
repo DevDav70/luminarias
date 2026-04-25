@@ -39,18 +39,7 @@ class LuminariaService {
     String id,
     LuminariaModel luminaria,
   ) async {
-    await _client
-        .from('luminarias')
-        .update({
-          'codigo': luminaria.codigo,
-          'area_zona': luminaria.areaZona,
-          'horometro': luminaria.horometro,
-          'estado': luminaria.estado,
-          'fecha_registro':
-              '${luminaria.fechaRegistro.year.toString().padLeft(4, '0')}-${luminaria.fechaRegistro.month.toString().padLeft(2, '0')}-${luminaria.fechaRegistro.day.toString().padLeft(2, '0')}',
-          'observacion': luminaria.observacion,
-        })
-        .eq('id', id);
+    await _client.from('luminarias').update(luminaria.toMap()).eq('id', id);
   }
 
   static Future<List<LuminariaModel>> buscarPorCodigo(String texto) async {
@@ -59,12 +48,61 @@ class LuminariaService {
     final response = await _client
         .from('luminarias')
         .select()
-        .ilike('codigo', '%${texto.trim()}%')
+        .ilike('codigo', '%${texto.trim().toUpperCase()}%')
         .order('created_at', ascending: false);
 
     return (response as List)
         .map((item) => LuminariaModel.fromMap(item))
         .toList();
+  }
+
+  static Future<List<LuminariaModel>> sugerenciasPorCodigo(String texto) async {
+    if (texto.trim().isEmpty) return [];
+
+    final buscar = texto.trim().toUpperCase();
+
+    final response = await _client
+        .from('luminarias')
+        .select()
+        .ilike('codigo', '%$buscar%')
+        .order('created_at', ascending: false)
+        .limit(50);
+
+    final lista = (response as List)
+        .map((item) => LuminariaModel.fromMap(item))
+        .toList();
+
+    final Map<String, LuminariaModel> unicos = {};
+
+    for (final item in lista) {
+      unicos[item.codigo.trim().toUpperCase()] = item;
+    }
+
+    final listaFinal = unicos.values.toList()
+      ..sort(
+        (a, b) => a.codigo.toUpperCase().compareTo(b.codigo.toUpperCase()),
+      );
+
+    return listaFinal.take(10).toList();
+  }
+
+  static Future<bool> existeRegistroEnFecha({
+    required String codigo,
+    required DateTime fecha,
+  }) async {
+    final fechaTexto =
+        '${fecha.year.toString().padLeft(4, '0')}-'
+        '${fecha.month.toString().padLeft(2, '0')}-'
+        '${fecha.day.toString().padLeft(2, '0')}';
+
+    final response = await _client
+        .from('luminarias')
+        .select('id')
+        .eq('codigo', codigo.trim().toUpperCase())
+        .eq('fecha_registro', fechaTexto)
+        .limit(1);
+
+    return (response as List).isNotEmpty;
   }
 
   static Future<LuminariaModel?> obtenerUltimoPorCodigo(String codigo) async {

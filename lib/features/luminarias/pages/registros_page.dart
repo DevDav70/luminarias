@@ -360,6 +360,173 @@ class _RegistrosPageState extends State<RegistrosPage> {
     }
   }
 
+  Future<bool> _confirmarEliminarRegistro(Map<String, dynamic> item) async {
+    final codigo = _safeText(item['codigo'], fallback: 'SIN CÓDIGO');
+
+    final confirmar = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(26),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.12),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 80,
+                  height: 80,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFDECEC),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.delete_rounded,
+                    color: Color(0xFFDC2626),
+                    size: 42,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const Text(
+                  'Eliminar registro',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF1F2937),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  '¿Estás seguro de eliminar el registro de\n$codigo?',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 14.5,
+                    color: Color(0xFF6B7280),
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          side: const BorderSide(color: Color(0xFFD1D5DB)),
+                        ),
+                        child: const Text(
+                          'Cancelar',
+                          style: TextStyle(
+                            color: Color(0xFF374151),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          backgroundColor: const Color(0xFFDC2626),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          elevation: 0,
+                        ),
+                        child: const Text(
+                          'Eliminar',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    return confirmar ?? false;
+  }
+
+  Future<bool> _eliminarRegistro(Map<String, dynamic> item) async {
+    final id = item['id']?.toString();
+
+    if (id == null || id.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo eliminar: ID no encontrado')),
+      );
+      return false;
+    }
+
+    try {
+      await supabase.from('luminarias').delete().eq('id', id);
+
+      if (!mounted) return false;
+
+      setState(() {
+        todosRegistros.removeWhere((e) => e['id']?.toString() == id);
+        registrosFiltrados.removeWhere((e) => e['id']?.toString() == id);
+
+        final fechas = <String>{};
+
+        for (final registro in todosRegistros) {
+          final campoFecha = obtenerCampoFecha(registro);
+          if (campoFecha.isNotEmpty) {
+            final key = _fechaClave(registro[campoFecha]);
+            if (key.isNotEmpty) fechas.add(key);
+          }
+        }
+
+        fechasDisponibles = fechas.toList()..sort((a, b) => b.compareTo(a));
+
+        if (fechaSeleccionada != null &&
+            !fechasDisponibles.contains(fechaSeleccionada)) {
+          fechaSeleccionada = null;
+          registrosFiltrados = todosRegistros;
+        }
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Registro eliminado correctamente')),
+      );
+
+      return true;
+    } catch (e) {
+      if (!mounted) return false;
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error al eliminar: $e')));
+
+      return false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isSmall = MediaQuery.of(context).size.width < 380;
@@ -398,38 +565,79 @@ class _RegistrosPageState extends State<RegistrosPage> {
           const SizedBox(width: 6),
         ],
       ),
-      body: loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: cargarRegistros,
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.only(bottom: 24),
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 450),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (child, animation) {
+          final slide = Tween<Offset>(
+            begin: const Offset(0, 0.04),
+            end: Offset.zero,
+          ).animate(animation);
+
+          return FadeTransition(
+            opacity: animation,
+            child: SlideTransition(position: slide, child: child),
+          );
+        },
+        child: loading
+            ? Center(
+                key: const ValueKey('loading'),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    _buildDateChips(isSmall),
-                    const SizedBox(height: 16),
-                    _buildSummaryCard(isSmall),
+                    const SizedBox(
+                      width: 44,
+                      height: 44,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 4,
+                        color: Color(0xFF102D57),
+                      ),
+                    ),
                     const SizedBox(height: 18),
-                    registrosFiltrados.isEmpty
-                        ? const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 40),
-                            child: Center(
-                              child: Text(
-                                'No hay registros para esa fecha',
-                                style: TextStyle(
-                                  color: Color(0xFF64748B),
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          )
-                        : _buildGroupedList(isSmall),
+                    Text(
+                      'Cargando registros...',
+                      style: TextStyle(
+                        color: const Color(0xFF64748B),
+                        fontWeight: FontWeight.w700,
+                        fontSize: isSmall ? 13 : 14,
+                      ),
+                    ),
                   ],
                 ),
+              )
+            : RefreshIndicator(
+                key: const ValueKey('content'),
+                onRefresh: cargarRegistros,
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.only(bottom: 24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildDateChips(isSmall),
+                      const SizedBox(height: 16),
+                      _buildSummaryCard(isSmall),
+                      const SizedBox(height: 18),
+                      registrosFiltrados.isEmpty
+                          ? const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 40),
+                              child: Center(
+                                child: Text(
+                                  'No hay registros para esa fecha',
+                                  style: TextStyle(
+                                    color: Color(0xFF64748B),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            )
+                          : _buildGroupedList(isSmall),
+                    ],
+                  ),
+                ),
               ),
-            ),
+      ),
     );
   }
 
@@ -928,104 +1136,138 @@ class _RegistrosPageState extends State<RegistrosPage> {
     final campoFecha = obtenerCampoFecha(item);
     final hora = campoFecha.isEmpty ? '--:--' : _horaVisual(item[campoFecha]);
 
-    return GestureDetector(
-      onTap: () => _editarRegistro(item),
-      child: Container(
+    return Dismissible(
+      key: ValueKey(item['id']?.toString() ?? '${codigo}_${hora}_$horometro'),
+      direction: DismissDirection.endToStart,
+      confirmDismiss: (_) async {
+        final confirmar = await _confirmarEliminarRegistro(item);
+        if (!confirmar) return false;
+
+        final eliminado = await _eliminarRegistro(item);
+        return eliminado;
+      },
+      background: Container(
         margin: const EdgeInsets.only(bottom: 12),
-        padding: EdgeInsets.all(isSmall ? 12 : 14),
+        padding: const EdgeInsets.symmetric(horizontal: 22),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: const Color(0xFFDC2626),
           borderRadius: BorderRadius.circular(26),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.035),
-              blurRadius: 12,
-              offset: const Offset(0, 5),
+        ),
+        alignment: Alignment.centerRight,
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.delete_rounded, color: Colors.white, size: 30),
+            SizedBox(height: 4),
+            Text(
+              'Eliminar',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ],
         ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 4,
-              height: isSmall ? 96 : 102,
-              decoration: BoxDecoration(
-                color: color,
-                borderRadius: BorderRadius.circular(999),
+      ),
+      child: GestureDetector(
+        onTap: () => _editarRegistro(item),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: EdgeInsets.all(isSmall ? 12 : 14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(26),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.035),
+                blurRadius: 12,
+                offset: const Offset(0, 5),
               ),
-            ),
-            const SizedBox(width: 12),
-            Container(
-              width: isSmall ? 60 : 72,
-              height: isSmall ? 60 : 72,
-              decoration: BoxDecoration(
-                color: colorBg.withOpacity(0.45),
-                borderRadius: BorderRadius.circular(999),
+            ],
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 4,
+                height: isSmall ? 96 : 102,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(999),
+                ),
               ),
-              child: Icon(
-                icon,
-                color: const Color(0xFF0F2747),
-                size: isSmall ? 28 : 34,
+              const SizedBox(width: 12),
+              Container(
+                width: isSmall ? 60 : 72,
+                height: isSmall ? 60 : 72,
+                decoration: BoxDecoration(
+                  color: colorBg.withOpacity(0.45),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Icon(
+                  icon,
+                  color: const Color(0xFF0F2747),
+                  size: isSmall ? 28 : 34,
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    codigo,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: isSmall ? 18 : 20,
-                      fontWeight: FontWeight.w900,
-                      color: const Color(0xFF0F172A),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      codigo,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: isSmall ? 18 : 20,
+                        fontWeight: FontWeight.w900,
+                        color: const Color(0xFF0F172A),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  _infoRow(Icons.place_outlined, ubicacion, isSmall),
-                  if (horometro != null) ...[
-                    const SizedBox(height: 6),
-                    _infoRow(
-                      Icons.schedule_rounded,
-                      'Horómetro: $horometro h',
-                      isSmall,
-                    ),
-                  ],
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _estadoBadge(
-                        estado.toUpperCase(),
-                        color,
-                        colorBg,
+                    const SizedBox(height: 8),
+                    _infoRow(Icons.place_outlined, ubicacion, isSmall),
+                    if (horometro != null) ...[
+                      const SizedBox(height: 6),
+                      _infoRow(
+                        Icons.schedule_rounded,
+                        'Horómetro: $horometro h',
                         isSmall,
                       ),
-                      _horaChip(hora, isSmall),
                     ],
-                  ),
-                ],
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _estadoBadge(
+                          estado.toUpperCase(),
+                          color,
+                          colorBg,
+                          isSmall,
+                        ),
+                        _horaChip(hora, isSmall),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              width: isSmall ? 34 : 38,
-              height: isSmall ? 34 : 38,
-              decoration: BoxDecoration(
-                color: const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(12),
+              const SizedBox(width: 8),
+              Container(
+                width: isSmall ? 34 : 38,
+                height: isSmall ? 34 : 38,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  Icons.edit_rounded,
+                  color: const Color(0xFF64748B),
+                  size: isSmall ? 18 : 20,
+                ),
               ),
-              child: Icon(
-                Icons.edit_rounded,
-                color: const Color(0xFF64748B),
-                size: isSmall ? 18 : 20,
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
